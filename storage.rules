@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// Studit — Cloud Storage rules. Images only, 5 MB cap, written under the
+// uploader's own uid folder (posts/{uid}/..., profiles/{uid}/..., communities/{uid}/...).
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function validImage() {
+      return request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /posts/{uid}/{fileName} {
+      allow read: if true;
+      allow write: if validImage() && request.auth.uid == uid;
+    }
+
+    match /profiles/{uid}/{fileName} {
+      allow read: if true;
+      allow write: if validImage() && request.auth.uid == uid;
+    }
+
+    match /communities/{uid}/{fileName} {
+      allow read: if true;
+      allow write: if validImage() && request.auth.uid == uid;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

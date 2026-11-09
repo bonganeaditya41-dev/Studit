@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "190002914900",
+    "project_id": "studdyit",
+    "storage_bucket": "studdyit.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:190002914900:android:b538f990d667f65b18efc1",
+        "android_client_info": {
+          "package_name": "com.studyit"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "190002914900-jppre127hfee7m4bd8u0863ji167li9i.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCJ-EdyRwaUslcdOmDjMU5e5_a2mi84y9c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "190002914900-jppre127hfee7m4bd8u0863ji167li9i.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

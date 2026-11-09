@@ -1,0 +1,200 @@
+rules_version = '2';
+
+// Studit — Firestore security rules (Spark / free plan friendly).
+// No Cloud Functions are used, so the rules themselves bound what a client may do:
+//  * a user can only ever write their own profile, posts, answers, votes and bookmarks
+//  * reputation points can rise by at most 30 in a single write and never go negative
+//  * counters (votes / answers) are the only fields other users may touch
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // ------------------------------------------------------------ users
+    match /users/{userId} {
+      allow read: if signedIn();
+
+      allow create: if isSelf(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.totalPoints == 0
+        && request.resource.data.keys().hasAll(
+             ['uid', 'fullName', 'username', 'usernameLower', 'email', 'academicClass', 'createdAt']
+           );
+
+      // Profile edits are allowed, but the uid and username are immutable and the
+      // points ledger can only move by a bounded amount per write.
+      allow update: if isSelf(userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.usernameLower == resource.data.usernameLower
+        && request.resource.data.totalPoints >= 0
+        && request.resource.data.totalPoints <= resource.data.totalPoints + 30;
+
+      allow delete: if false;
+
+      match /blocked/{blockedId} {
+        allow read, write: if isSelf(userId);
+      }
+    }
+
+    // ------------------------------------------------------------ communities
+    match /communities/{communityId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.creatorId == request.auth.uid
+        && request.resource.data.memberCount == 1
+        && request.resource.data.name.size() >= 3;
+
+      allow update: if signedIn() && (
+        (resource.data.creatorId == request.auth.uid
+          && changed().hasOnly(['name', 'nameLower', 'description', 'rules', 'iconUrl']))
+        || (changed().hasOnly(['memberCount'])
+            && (request.resource.data.memberCount == resource.data.memberCount + 1
+                || request.resource.data.memberCount == resource.data.memberCount - 1))
+      );
+
+      allow delete: if signedIn() && resource.data.creatorId == request.auth.uid;
+    }
+
+    match /communityMembers/{membershipId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && membershipId == request.resource.data.communityId + '_' + request.auth.uid;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ posts
+    match /posts/{postId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.upvotesCount == 0
+        && request.resource.data.downvotesCount == 0
+        && request.resource.data.answersCount == 0
+        && request.resource.data.title.size() >= 8;
+
+      allow update: if signedIn() && (
+        // author edits their own content
+        (resource.data.authorId == request.auth.uid
+          && changed().hasOnly(['title', 'titleLower', 'description', 'subject',
+                                 'academicClass', 'tags', 'imageUrl', 'updatedAt']))
+        // anyone signed in may move the vote counters
+        || changed().hasOnly(['upvotesCount', 'downvotesCount', 'score', 'trendScore', 'updatedAt'])
+        // answering bumps the answer counter
+        || changed().hasOnly(['answersCount', 'isAnswered', 'trendScore', 'updatedAt'])
+      );
+
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ answers
+    match /answers/{answerId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.upvotesCount == 0
+        && request.resource.data.downvotesCount == 0
+        && request.resource.data.isAccepted == false
+        && request.resource.data.content.size() >= 5;
+
+      allow update: if signedIn() && (
+        (resource.data.authorId == request.auth.uid
+          && changed().hasOnly(['content', 'updatedAt']))
+        || changed().hasOnly(['upvotesCount', 'downvotesCount', 'score', 'updatedAt'])
+        // only the person who asked the question may accept an answer
+        || (changed().hasOnly(['isAccepted', 'updatedAt'])
+            && get(/databases/$(database)/documents/posts/$(resource.data.postId))
+                 .data.authorId == request.auth.uid)
+      );
+
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ comments / replies
+    match /comments/{commentId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.content.size() >= 2;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ votes
+    // One document per (target, user): the document id is enforced so a student
+    // cannot stack multiple votes on the same post or answer.
+    match /votes/{voteId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && voteId == request.resource.data.targetType + '_'
+                     + request.resource.data.targetId + '_'
+                     + request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.targetId == resource.data.targetId
+        && request.resource.data.targetType == resource.data.targetType;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ bookmarks
+    match /bookmarks/{bookmarkId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && bookmarkId == request.auth.uid + '_' + request.resource.data.postId;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ notifications
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && resource.data.recipientId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.senderId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.recipientId == request.auth.uid
+        && changed().hasOnly(['isRead']);
+      allow delete: if signedIn() && resource.data.recipientId == request.auth.uid;
+    }
+
+    // ------------------------------------------------------------ reports
+    match /reports/{reportId} {
+      allow read: if signedIn() && resource.data.reporterId == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.reason.size() >= 3;
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------ points ledger
+    match /pointsEvents/{eventId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.delta != 0
+        && request.resource.data.delta >= -30
+        && request.resource.data.delta <= 30;
+      allow update, delete: if false;
+    }
+
+    // Deny everything not matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
